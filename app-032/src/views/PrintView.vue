@@ -11,6 +11,8 @@ import { useRoute, useRouter } from 'vue-router'
 import ChecksPanel from '../components/ChecksPanel.vue'
 import { getLantern } from '../core/store'
 import { CALIBRATION_CIRCLE_MM, CALIBRATION_RULER_MM, computeAll } from '../core/checks'
+import { checksDigest } from '../core/check-map'
+import { useParamFocus } from '../composables/useParamFocus'
 import {
   DEFAULT_LOFT_OPTIONS,
   PAPER_DIMS,
@@ -63,6 +65,14 @@ const full = computed(() => {
   const l = lantern.value
   if (!l) return null
   return computeAll(l, { ...opts })
+})
+
+/** 点自检里未过的结论（如 CHK-06 分页）→ 落到本页并标出纸张/搭接量 */
+const { focusCheck, clearFocus } = useParamFocus()
+const digest = computed(() => {
+  const l = lantern.value
+  if (!l || !full.value) return ''
+  return checksDigest(l, full.value.checks)
 })
 
 const sheets = computed(() => full.value?.sheets ?? [])
@@ -238,15 +248,20 @@ function today(): string {
         <button :class="{ on: mode === 'labels' }" @click="setMode('labels')">裁片标签</button>
       </div>
 
+      <div v-if="focusCheck" class="focus-banner">
+        已按 <b>{{ focusCheck }}</b> 的对应关系把相关参数用红框标出；改动即重新核对。
+        <button @click="clearFocus">撤下标出</button>
+      </div>
+
       <div v-if="mode === 'loft'" class="fields">
-        <label>
+        <label data-param="pageSize">
           纸张
           <select v-model="opts.paper">
             <option value="A4">A4（210×297mm）</option>
             <option value="A3">A3（297×420mm）</option>
           </select>
         </label>
-        <label>
+        <label data-param="overlapMm">
           长条搭接量 (mm)
           <input v-model.number="opts.overlapMm" type="number" min="0" max="60" step="1" />
         </label>
@@ -650,6 +665,7 @@ function today(): string {
       class="no-print"
       :checks="full.checks.filter((c) => ['CHK-05', 'CHK-06', 'CHK-08'].includes(c.id))"
       :elapsed-ms="full.elapsedMs"
+      :digest="digest"
       title="放样与分页自检"
     />
   </div>
@@ -736,6 +752,32 @@ button.primary:hover {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.focus-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: #fdecea;
+  border: 1px solid #f2c7c1;
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 12.5px;
+  color: var(--red);
+}
+
+.focus-banner button {
+  font-size: 12px;
+  padding: 2px 10px;
+  border: 1px solid var(--red);
+  background: #fff;
+  color: var(--red);
+}
+
+.focus-banner button:hover {
+  background: var(--red);
+  color: #fff;
 }
 
 .tabs button.on {

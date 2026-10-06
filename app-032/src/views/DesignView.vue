@@ -1,19 +1,26 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import LanternPreview from '../components/LanternPreview.vue'
 import ChecksPanel from '../components/ChecksPanel.vue'
+import ExportStaleBanner from '../components/ExportStaleBanner.vue'
 import { getLantern, distributeLayers, syncLayerDiameters } from '../core/store'
 import { computeAll } from '../core/checks'
 import { DEFAULT_LOFT_OPTIONS } from '../core/paginate'
 import { buildGeometry, polyhedronInfo, r1 } from '../core/geometry'
 import { COVERINGS, CRAFT, coveringSpec, kindLabel } from '../core/craft'
 import { diameterFromPerimeter, diameterFromRib } from '../core/checks'
+import { checksDigest } from '../core/check-map'
+import { useParamFocus } from '../composables/useParamFocus'
 import type { Lantern, Panel } from '../core/types'
 
 const route = useRoute()
 const lantern = computed(() => getLantern(route.params.id as string))
 const mode = ref<'front' | 'top' | 'iso'>('front')
+
+/** 点自检里未过的结论 → 相关参数红框标出；参数一改即撤下并重核 */
+const { focusCheck, clearFocus } = useParamFocus()
+watch(lantern, () => clearFocus(), { deep: true })
 
 const loft = computed(() => ({
   ...DEFAULT_LOFT_OPTIONS,
@@ -25,6 +32,13 @@ const full = computed(() => {
   const l = lantern.value
   if (!l) return null
   return computeAll(l, loft.value)
+})
+
+/** 当前结论版本号：与导出单子、本机存档快照里的版本号同源 */
+const digest = computed(() => {
+  const l = lantern.value
+  if (!l || !full.value) return ''
+  return checksDigest(l, full.value.checks)
 })
 
 const geo = computed(() => (lantern.value ? buildGeometry(lantern.value) : null))
@@ -143,7 +157,7 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
           <label>灯型</label>
           <input :value="kindLabel(lantern.kind)" type="text" readonly />
         </div>
-        <div class="field">
+        <div class="field" data-param="sides">
           <label>{{ lantern.kind === 'revolution' ? '竖篾（母线）根数' : '棱数' }}</label>
           <input
             v-if="lantern.kind !== 'polyhedron'"
@@ -161,11 +175,11 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
       </div>
 
       <div class="row">
-        <div class="field">
+        <div class="field" data-param="maxDiameterMm">
           <label>最大直径 (mm)</label>
           <input v-model.number="lantern.maxDiameterMm" type="number" min="20" max="3000" step="1" />
         </div>
-        <div class="field">
+        <div class="field" data-param="totalHeightMm">
           <label>总高 (mm)</label>
           <input
             :value="lantern.totalHeightMm"
@@ -180,7 +194,7 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
       </div>
 
       <div class="row">
-        <div class="field">
+        <div class="field" data-param="mouthDiameterMm">
           <label>收口直径 (mm)</label>
           <input
             v-model.number="lantern.mouthDiameterMm"
@@ -191,7 +205,7 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
             :disabled="lantern.mouthStyle === 'flat'"
           />
         </div>
-        <div class="field">
+        <div class="field" data-param="baseDiameterMm">
           <label>底口直径 (mm)</label>
           <input
             v-model.number="lantern.baseDiameterMm"
@@ -207,7 +221,7 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
       <p v-if="diameterWarn" class="warn-line">⚠ {{ diameterWarn }}</p>
 
       <div class="row">
-        <div class="field">
+        <div class="field" data-param="mouthStyle">
           <label>上收口方式</label>
           <select v-model="lantern.mouthStyle">
             <option value="flat">平口</option>
@@ -215,7 +229,7 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
             <option value="gourd">葫芦口（贝塞尔）</option>
           </select>
         </div>
-        <div class="field">
+        <div class="field" data-param="bottomStyle">
           <label>下收口方式</label>
           <select v-model="lantern.bottomStyle">
             <option value="flat">平口</option>
@@ -225,24 +239,24 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
         </div>
       </div>
 
-      <div class="field">
+      <div class="field" data-param="smoothness">
         <label>收口曲线强度 <em>{{ lantern.smoothness.toFixed(2) }}</em></label>
         <input v-model.number="lantern.smoothness" type="range" min="0" max="1" step="0.02" />
         <small>当前收口段合计占总高 {{ shoulderPct }}%（上 + 下）</small>
       </div>
 
-      <div v-if="lantern.kind === 'revolution'" class="field">
+      <div v-if="lantern.kind === 'revolution'" class="field" data-param="divisions">
         <label>母线等分数 <em>{{ lantern.divisions }} 等分</em></label>
         <input v-model.number="lantern.divisions" type="range" :min="CRAFT.divMin" :max="CRAFT.divMax" step="1" />
         <small>旋转体按 {{ lantern.divisions }} 等分近似展开，等分数可调；等分越少每块越宽，面积核对偏差越大。</small>
       </div>
 
       <div class="row">
-        <div class="field">
+        <div class="field" data-param="layers">
           <label>层数（分段）</label>
           <input :value="lantern.layers.length" type="number" min="1" max="12" @change="onLayerCount" />
         </div>
-        <div class="field">
+        <div class="field" data-param="covering">
           <label>蒙面类型</label>
           <select :value="lantern.covering" @change="onCovering">
             <option v-for="c in COVERINGS" :key="c.id" :value="c.id">
@@ -253,18 +267,18 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
       </div>
 
       <div class="row">
-        <div class="field">
+        <div class="field" data-param="seamAllowanceMm">
           <label>缝份（每边 mm）</label>
           <input v-model.number="lantern.seamAllowanceMm" type="number" min="0" max="40" step="1" />
         </div>
-        <div class="field">
+        <div class="field" data-param="lashAllowanceMm">
           <label>绑扎余量（每端 mm）</label>
           <input v-model.number="lantern.lashAllowanceMm" type="number" min="0" max="80" step="1" />
         </div>
       </div>
 
       <h3>分段高度与配色</h3>
-      <table class="layers">
+      <table class="layers" data-param="layers">
         <thead>
           <tr>
             <th>层</th>
@@ -288,11 +302,11 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
 
       <h3>批量制灯</h3>
       <div class="row">
-        <div class="field">
+        <div class="field" data-param="batchCount">
           <label>数量（个）</label>
           <input v-model.number="lantern.batchCount" type="number" min="1" max="500" step="1" />
         </div>
-        <div class="field">
+        <div class="field" data-param="wasteRatio">
           <label>损耗率 <em>{{ (lantern.wasteRatio * 100).toFixed(0) }}%</em></label>
           <input v-model.number="lantern.wasteRatio" type="range" min="0" max="0.2" step="0.01" />
         </div>
@@ -320,6 +334,13 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
     </section>
 
     <section class="viewer">
+      <div v-if="focusCheck" class="focus-banner">
+        已按 <b>{{ focusCheck }}</b> 的对应关系把相关参数用红框标出；改动任一参数即重新核对，红框随之撤下。
+        <button @click="clearFocus">撤下标出</button>
+      </div>
+
+      <ExportStaleBanner :lantern-id="lantern.id" :digest="digest" />
+
       <div class="tabs">
         <button :class="{ on: mode === 'front' }" @click="mode = 'front'">正视图</button>
         <button :class="{ on: mode === 'top' }" @click="mode = 'top'">俯视图</button>
@@ -327,7 +348,7 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
         <span v-if="lantern.mouthStyle === 'gourd'" class="tip">拖动绿色控制点可改葫芦口曲线</span>
       </div>
 
-      <div class="canvas">
+      <div class="canvas" data-param="ctrlCurve">
         <LanternPreview
           :lantern="lantern"
           :mode="mode"
@@ -362,7 +383,7 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
         </ul>
       </div>
 
-      <ChecksPanel v-if="full" :checks="full.checks" :elapsed-ms="full.elapsedMs" title="参数自检" />
+      <ChecksPanel v-if="full" :checks="full.checks" :elapsed-ms="full.elapsedMs" :digest="digest" title="参数自检" />
     </section>
   </div>
 </template>
@@ -573,6 +594,35 @@ button:hover {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.focus-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: #fdecea;
+  border: 1px solid #f2c7c1;
+  border-radius: 10px;
+  padding: 8px 14px;
+  font-size: 12.5px;
+  color: var(--red);
+}
+
+.focus-banner button {
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--red);
+  background: #fff;
+  color: var(--red);
+  cursor: pointer;
+}
+
+.focus-banner button:hover {
+  background: var(--red);
+  color: #fff;
 }
 
 .tabs {

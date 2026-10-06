@@ -76,6 +76,13 @@ function updatedAt(iso: string): string {
       </div>
     </section>
 
+    <section v-if="state.migrations.length" class="block migrations">
+      <h2>旧存档补齐说明 <em>（缺的参数已按写明的默认值补上，并参与核对）</em></h2>
+      <p v-for="m in state.migrations" :key="m.id">
+        灯样「{{ m.name }}」缺少：{{ m.filled.join('、') }} —— 已按默认值补上；改动任一参数会按新值重核。
+      </p>
+    </section>
+
     <section class="block">
       <h2>我的灯样 <em>（保存在本机浏览器，不上传）</em></h2>
       <p v-if="lanterns.length === 0" class="empty">还没有灯样，先在上面选一个灯型新建。</p>
@@ -87,6 +94,7 @@ function updatedAt(iso: string): string {
             <th>尺寸</th>
             <th>层数 / 棱数</th>
             <th>蒙面</th>
+            <th>存档自检（本机留下的那一份）</th>
             <th>最近修改</th>
             <th>操作</th>
           </tr>
@@ -98,6 +106,13 @@ function updatedAt(iso: string): string {
             <td class="mono">⌀{{ l.maxDiameterMm }} × H{{ l.totalHeightMm }}</td>
             <td class="mono">{{ l.layers.length }} 层 / {{ l.sides }} 棱</td>
             <td>{{ coveringLabel(l.covering) }}</td>
+            <td class="mono">
+              <template v-if="state.snapshots[l.id]">
+                {{ state.snapshots[l.id].checks.filter((c) => c.pass).length }}/{{ state.snapshots[l.id].checks.length }} 通过 ·
+                版本 {{ state.snapshots[l.id].digest }}
+              </template>
+              <template v-else>—</template>
+            </td>
             <td class="mono">{{ updatedAt(l.updatedAt) }}</td>
             <td class="ops">
               <button @click="open(l.id)">打开</button>
@@ -197,6 +212,23 @@ function updatedAt(iso: string): string {
   font-size: 12px;
   color: var(--ink-soft);
   font-weight: 400;
+}
+
+.migrations {
+  background: #fdf3e2;
+  border: 1px solid #e8cfa4;
+  border-radius: 10px;
+  padding: 12px 16px;
+}
+
+.migrations h2 {
+  border-left-color: var(--gold) !important;
+}
+
+.migrations p {
+  margin: 4px 0;
+  font-size: 12.5px;
+  color: #8a4b12;
 }
 
 .cards {

@@ -212,6 +212,24 @@ a {
   color: var(--red);
 }
 
+/* 自检「落到相关参数」的红框标出（由 useParamFocus 按 data-param 加挂） */
+.param-focus {
+  outline: 2px solid var(--red) !important;
+  outline-offset: 2px;
+  border-radius: 8px;
+  animation: param-focus-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes param-focus-pulse {
+  0%,
+  100% {
+    outline-color: var(--red);
+  }
+  50% {
+    outline-color: rgba(179, 36, 31, 0.25);
+  }
+}
+
 @media print {
   .app-header,
   .app-footer,

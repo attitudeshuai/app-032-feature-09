@@ -2,10 +2,12 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ChecksPanel from '../components/ChecksPanel.vue'
-import { getLantern } from '../core/store'
+import ExportStaleBanner from '../components/ExportStaleBanner.vue'
+import { getLantern, recordExport } from '../core/store'
 import { computeAll } from '../core/checks'
 import { DEFAULT_LOFT_OPTIONS } from '../core/paginate'
 import { downloadText, materialsCsv } from '../core/exporter'
+import { checksDigest } from '../core/check-map'
 import { coveringSpec, CRAFT } from '../core/craft'
 import { panelCutArea } from '../core/panels'
 
@@ -16,6 +18,11 @@ const full = computed(() => {
   const l = lantern.value
   if (!l) return null
   return computeAll(l, { ...DEFAULT_LOFT_OPTIONS, paper: l.pageSize, overlapMm: l.overlapMm })
+})
+const digest = computed(() => {
+  const l = lantern.value
+  if (!l || !full.value) return ''
+  return checksDigest(l, full.value.checks)
 })
 
 const cov = computed(() => (lantern.value ? coveringSpec(lantern.value.covering) : null))
@@ -42,7 +49,9 @@ const layerFabric = computed(() => {
 function exportCsv() {
   const l = lantern.value
   if (!l || !full.value) return
-  downloadText(`${l.name}-备料单.csv`, materialsCsv(l, full.value.materials, full.value.batch))
+  const file = `${l.name}-备料单.csv`
+  downloadText(file, materialsCsv(l, full.value.materials, full.value.batch, full.value.checks, digest.value))
+  recordExport({ lanternId: l.id, kind: 'materials', file, at: new Date().toISOString(), digest: digest.value })
 }
 </script>
 
@@ -62,6 +71,8 @@ function exportCsv() {
         <button class="primary" @click="router.push(`/print/${lantern.id}?view=frame`)">打印备料 / 清单</button>
       </div>
     </section>
+
+    <ExportStaleBanner :lantern-id="lantern.id" :digest="digest" />
 
     <section class="batch">
       <div class="field">
@@ -85,8 +96,7 @@ function exportCsv() {
             <th class="num">单灯</th>
             <th class="num">批量 {{ full.batch.count }} 个（含损耗）</th>
           </tr>
-        </thead>
-        <tbody>
+        </thead><tbody>
           <tr>
             <td>竹篾 / 铁丝（含绑扎余量）</td>
             <td class="num mono">{{ full.materials.frameM.toFixed(3) }} m</td>
@@ -134,6 +144,11 @@ function exportCsv() {
       </div>
     </section>
 
+    <p class="linkage">
+      用量随参数联动（与自检同一套对应关系）：竹篾/扎线 ← 最大直径、总高、棱数、层数、绑扎余量（CHK-02/CHK-04）；
+      蒙面/胶 ← 直径、层数、缝份、蒙面类型（CHK-03/CHK-05）；批量 ← 数量、损耗率（CHK-07）。参数一改本页即重算。
+    </p>
+
     <section class="palette">
       <h3>分层蒙面用量（按层买布/买纸用）</h3>
       <table>
@@ -167,7 +182,7 @@ function exportCsv() {
       </table>
     </section>
 
-    <ChecksPanel :checks="full.checks" :elapsed-ms="full.elapsedMs" title="全量验收自检（§10）" />
+    <ChecksPanel :checks="full.checks" :elapsed-ms="full.elapsedMs" :digest="digest" title="全量验收自检（§10）" />
   </div>
 </template>
 
@@ -386,6 +401,16 @@ tr.led td {
   padding: 10px 14px;
   font-size: 11.5px;
   color: var(--ink-soft);
+}
+
+.linkage {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ink-soft);
+  background: var(--surface-2);
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  padding: 8px 12px;
 }
 
 .palette {

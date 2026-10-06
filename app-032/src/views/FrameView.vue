@@ -2,11 +2,13 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ChecksPanel from '../components/ChecksPanel.vue'
-import { getLantern } from '../core/store'
+import ExportStaleBanner from '../components/ExportStaleBanner.vue'
+import { getLantern, recordExport } from '../core/store'
 import { computeAll } from '../core/checks'
 import { DEFAULT_LOFT_OPTIONS } from '../core/paginate'
 import { groupMembers } from '../core/frame'
 import { kindName, membersCsv, downloadText } from '../core/exporter'
+import { checksDigest } from '../core/check-map'
 import { styleLabel } from '../core/craft'
 import type { FrameMember } from '../core/types'
 
@@ -19,6 +21,11 @@ const full = computed(() => {
   return computeAll(l, { ...DEFAULT_LOFT_OPTIONS, paper: l.pageSize, overlapMm: l.overlapMm })
 })
 const groups = computed(() => (full.value ? groupMembers(full.value.frame.members) : []))
+const digest = computed(() => {
+  const l = lantern.value
+  if (!l || !full.value) return ''
+  return checksDigest(l, full.value.checks)
+})
 
 function bendText(m: FrameMember): string {
   if (m.bendRadiusMm) return `R${m.bendRadiusMm.toFixed(1)}mm`
@@ -29,7 +36,9 @@ function bendText(m: FrameMember): string {
 function exportCsv() {
   const l = lantern.value
   if (!l || !full.value) return
-  downloadText(`${l.name}-构件清单.csv`, membersCsv(l, full.value.frame.members))
+  const file = `${l.name}-构件清单.csv`
+  downloadText(file, membersCsv(l, full.value.frame.members, full.value.checks, digest.value))
+  recordExport({ lanternId: l.id, kind: 'members', file, at: new Date().toISOString(), digest: digest.value })
 }
 </script>
 
@@ -52,6 +61,8 @@ function exportCsv() {
         <button class="primary" @click="router.push(`/print/${lantern.id}?view=frame`)">打印构件清单</button>
       </div>
     </section>
+
+    <ExportStaleBanner :lantern-id="lantern.id" :digest="digest" />
 
     <section class="stats">
       <div class="stat"><span>构件总根数</span><b>{{ full.frame.totalQty }}</b></div>
@@ -95,6 +106,7 @@ function exportCsv() {
     <ChecksPanel
       :checks="full.checks.filter((c) => ['CHK-01', 'CHK-02', 'CHK-04', 'CHK-08'].includes(c.id))"
       :elapsed-ms="full.elapsedMs"
+      :digest="digest"
       title="骨架计算自检"
     />
   </div>

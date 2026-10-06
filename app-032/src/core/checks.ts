@@ -1,6 +1,7 @@
 /**
  * 自检（对应规格书 §10 验收标准）
  * 每次参数变化都会重算全部几何并跑一遍断言，结果直接显示在界面上。
+ * 每条结论携带「相关参数（按影响排队）」，对应关系唯一来源见 check-map.ts。
  */
 import type { CheckResult, Lantern } from './types'
 import { bodySurfaceArea, polygonEdge, ringPerimeter, segmentInfos } from './geometry'
@@ -9,6 +10,7 @@ import { buildPanels, panelNetArea, type PanelResult } from './panels'
 import { computeBatch, computeMaterials, type BatchMaterials, type SingleLightMaterials } from './materials'
 import { assertNoPanelSplit, paginate, type LoftOptions, type Sheet } from './paginate'
 import { CRAFT } from './craft'
+import { paramLinksFor } from './check-map'
 
 export interface FullResult {
   frame: FrameResult
@@ -44,9 +46,12 @@ function runChecks(
   sheets: Sheet[],
   elapsedMs: number
 ): CheckResult[] {
-  const out: CheckResult[] = []
+  // params 在末尾统一挂上（对应关系唯一来源 check-map.ts）
+  const out: Omit<CheckResult, 'params'>[] = []
   const g = frame.geometry
   const lash = Math.max(0, l.lashAllowanceMm)
+  /** 个别参数的针对性建议（在 check-map 静态建议之上按当前数值改写） */
+  const adviceOverride: Record<string, Record<string, string>> = {}
 
   // ---- CHK-01 几何：棱长/周长与手算一致 ----
   {
@@ -125,25 +130,36 @@ function runChecks(
     })
   }
 
-  // ---- CHK-05 面积核对 ----
+  // ---- CHK-05 面积核对（按比值分档；比值百分数两位小数，面积 m² 三位小数） ----
   {
     const netArea = panels.panels.reduce((a, p) => a + panelNetArea(p) * p.qty, 0)
-    const refArea = bodySurfaceArea(g, Math.max(3, Math.round(l.divisions)))
+    const div = Math.max(3, Math.round(l.divisions))
+    const refArea = bodySurfaceArea(g, div)
     const ratio = refArea > 0 ? netArea / refArea : 0
-    const pass = ratio >= 0.97 && ratio <= 1.03
+    const pct = ratio * 100
+    const band = areaBand(pct)
     let advice = ''
-    if (!pass && !g.polygon) {
-      const need = suggestDivisions(l, netArea, ratio)
-      advice = need ? `；建议把母线等分数提高到 ${need}（当前 ${l.divisions}）` : ''
-    } else if (!pass) {
-      advice = '；请检查缝份/分层参数，棱柱类侧面积应与裁片面积完全一致'
+    if (!band.pass && !g.polygon && l.kind !== 'polyhedron') {
+      const need = suggestDivisions(l)
+      if (need !== null) {
+        advice = `；建议把母线等分数从 ${div} 提高到 ${need}（按整数逐个往上试算，${need} 为首个落回容差的等分数）`
+        adviceOverride['CHK-05'] = {
+          divisions: `把母线等分数从 ${div} 提高到 ${need}：按整数往上加，${need} 是首个让比值落回 [97.00%, 103.00%] 的等分数`
+        }
+      } else {
+        advice = `；等分数已试到上限 ${CRAFT.divMax} 仍超差，请核对直径与分段参数`
+      }
+    } else if (!band.pass) {
+      advice = '；棱柱/多面体的侧面积应与裁片净面积完全一致，请检查分层高与直径参数'
     }
     out.push({
       id: 'CHK-05',
       title: '面积核对：Σ裁片净面积 / 灯体表面积 ∈ [0.97, 1.03]',
-      pass,
-      value: `比值 ${(ratio * 100).toFixed(2)}%`,
-      detail: `裁片净面积 ${f3(netArea / 1_000_000)}m²，灯体表面积（含顶底盖）${f3(refArea / 1_000_000)}m²${advice}`
+      pass: band.pass,
+      value: `比值 ${pct.toFixed(2)}% · ${band.short}`,
+      detail:
+        `裁片净面积 ${f3(netArea / 1_000_000)}m² / 灯体表面积（含顶底盖）${f3(refArea / 1_000_000)}m² = ${pct.toFixed(2)}%，` +
+        `分档：${band.label}（比值按百分数保留两位小数，面积按 m² 保留三位小数）${advice}`
     })
   }
 
@@ -191,17 +207,38 @@ function runChecks(
     })
   }
 
-  return out
+  // 挂上「结论 → 相关参数」对应关系（唯一来源 check-map.ts；个别参数按当前数值改写建议）
+  return out.map((c) => {
+    const ov = adviceOverride[c.id] || {}
+    return {
+      ...c,
+      params: paramLinksFor(c.id).map((p) => (ov[p.param] ? { ...p, advice: ov[p.param] } : p))
+    }
+  })
 }
 
-function suggestDivisions(l: Lantern, netArea: number, ratio: number): number | null {
-  if (ratio <= 1.0005) return null
-  for (let d = Math.max(3, Math.round(l.divisions)) + 1; d <= CRAFT.divMax; d++) {
-    const ref = bodySurfaceArea(frameGeometryOf(l), d)
-    const r = ref > 0 ? netArea / ref : 0
-    if (r <= 1.03) return d
+/** 面积比值分档（输入为百分数；容差档 [97.00%, 103.00%] 为通过） */
+function areaBand(pct: number): { label: string; short: string; pass: boolean } {
+  if (pct >= 97 && pct <= 103) return { label: '合格档 [97.00%, 103.00%]', short: '合格档', pass: true }
+  if (pct >= 95 && pct <= 105) return { label: '临界档（超出容差，偏差 ≤ 5.00%）', short: '临界档', pass: false }
+  if (pct >= 90 && pct <= 115) return { label: '超差档（偏差 5.00% ~ 15.00%）', short: '超差档', pass: false }
+  return { label: '严重超差档（偏差 > 15.00%）', short: '严重超差档', pass: false }
+}
+
+/**
+ * 母线等分数按整数往上加，返回首个让面积比值落进容差 [0.97, 1.03] 的等分数；
+ * 裁片净面积与参考表面积都按候选等分数重算（展开方式随等分数变化）。
+ */
+function suggestDivisions(l: Lantern): number | null {
+  const cur = Math.max(3, Math.round(l.divisions))
+  for (let d = cur + 1; d <= CRAFT.divMax; d++) {
+    const test: Lantern = { ...l, divisions: d }
+    const ref = bodySurfaceArea(buildFrame(test).geometry, d)
+    const net = buildPanels(test).netAreaMm2
+    const r = ref > 0 ? net / ref : 0
+    if (r >= 0.97 && r <= 1.03) return d
   }
-  return CRAFT.divMax
+  return null
 }
 
 function loftOverlap(sheets: Sheet[]): number {
@@ -216,10 +253,6 @@ function loftOverlap(sheets: Sheet[]): number {
 /** 校验尺标称长度（mm）：1:1 打印用 */
 export const CALIBRATION_RULER_MM = 100
 export const CALIBRATION_CIRCLE_MM = 100
-
-function frameGeometryOf(l: Lantern) {
-  return buildFrame(l).geometry
-}
 
 /** 由圆周长反推直径（尺寸反推工具用） */
 export function diameterFromPerimeter(lengthMm: number, n: number, polygon: boolean, lashMm: number): number {

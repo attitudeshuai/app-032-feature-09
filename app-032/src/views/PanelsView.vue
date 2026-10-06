@@ -3,11 +3,13 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PanelDiagram from '../components/PanelDiagram.vue'
 import ChecksPanel from '../components/ChecksPanel.vue'
-import { getLantern } from '../core/store'
+import ExportStaleBanner from '../components/ExportStaleBanner.vue'
+import { getLantern, recordExport } from '../core/store'
 import { computeAll } from '../core/checks'
 import { DEFAULT_LOFT_OPTIONS } from '../core/paginate'
 import { bodySurfaceArea } from '../core/geometry'
 import { downloadText, panelsCsv, shapeName } from '../core/exporter'
+import { checksDigest } from '../core/check-map'
 import { coveringSpec } from '../core/craft'
 
 const route = useRoute()
@@ -17,6 +19,11 @@ const full = computed(() => {
   const l = lantern.value
   if (!l) return null
   return computeAll(l, { ...DEFAULT_LOFT_OPTIONS, paper: l.pageSize, overlapMm: l.overlapMm })
+})
+const digest = computed(() => {
+  const l = lantern.value
+  if (!l || !full.value) return ''
+  return checksDigest(l, full.value.checks)
 })
 
 const ratio = computed(() => {
@@ -41,7 +48,9 @@ const palette = computed(() => {
 function exportCsv() {
   const l = lantern.value
   if (!l || !full.value) return
-  downloadText(`${l.name}-蒙面裁片清单.csv`, panelsCsv(l, full.value.panels.panels))
+  const file = `${l.name}-蒙面裁片清单.csv`
+  downloadText(file, panelsCsv(l, full.value.panels.panels, full.value.checks, digest.value))
+  recordExport({ lanternId: l.id, kind: 'panels', file, at: new Date().toISOString(), digest: digest.value })
 }
 </script>
 
@@ -65,6 +74,8 @@ function exportCsv() {
         <button class="primary" @click="router.push(`/print/${lantern.id}?view=labels`)">打印裁片标签</button>
       </div>
     </section>
+
+    <ExportStaleBanner :lantern-id="lantern.id" :digest="digest" />
 
     <section class="stats">
       <div class="stat"><span>裁片总块数</span><b>{{ full.panels.totalQty }}</b></div>
@@ -148,6 +159,7 @@ function exportCsv() {
     <ChecksPanel
       :checks="full.checks.filter((c) => ['CHK-03', 'CHK-05', 'CHK-06'].includes(c.id))"
       :elapsed-ms="full.elapsedMs"
+      :digest="digest"
       title="裁片与分页自检"
     />
   </div>

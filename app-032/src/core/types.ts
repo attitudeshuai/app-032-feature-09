@@ -137,6 +137,40 @@ export interface MaterialTally {
   ledCount?: number
 }
 
+/** 可被自检结论指向的参数（与 check-map.ts 的 PARAM_META 一一对应） */
+export type ParamId =
+  | 'maxDiameterMm'
+  | 'totalHeightMm'
+  | 'mouthDiameterMm'
+  | 'baseDiameterMm'
+  | 'sides'
+  | 'layers'
+  | 'mouthStyle'
+  | 'bottomStyle'
+  | 'smoothness'
+  | 'ctrlCurve'
+  | 'divisions'
+  | 'covering'
+  | 'seamAllowanceMm'
+  | 'lashAllowanceMm'
+  | 'batchCount'
+  | 'wasteRatio'
+  | 'pageSize'
+  | 'overlapMm'
+
+/** 结论 → 参数 的一条指向（按影响大小排队） */
+export interface CheckParamRef {
+  param: ParamId
+  /** 参数中文名（全项目同一说法，来自 check-map.PARAM_META） */
+  label: string
+  /** 影响权重：1（小）~ 5（大），排队依据 */
+  weight: number
+  /** 怎么动最可能把这条结论转成通过 */
+  advice: string
+  /** 参数所在页面（点结论后落到的页面） */
+  page: 'design' | 'print'
+}
+
 /** 构件与裁片的自检结果（对应规格书 §10） */
 export interface CheckResult {
   id: string
@@ -145,4 +179,15 @@ export interface CheckResult {
   detail: string
   /** 相关数值，便于界面展示 */
   value?: string
+  /** 相关参数（按影响从大到小）；空数组 = 与灯样参数无关（公式自检） */
+  params: CheckParamRef[]
+}
+
+/** 本机存档里留下的那一份自检快照（与页面、导出单子同一套对应关系） */
+export interface CheckSnapshot {
+  /** 核对时间（ISO） */
+  at: string
+  /** 结论版本号：参数或结论一变即变，用于点明哪份导出单/存档指的仍是老结论 */
+  digest: string
+  checks: CheckResult[]
 }

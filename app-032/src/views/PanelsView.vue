@@ -3,11 +3,12 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PanelDiagram from '../components/PanelDiagram.vue'
 import ChecksPanel from '../components/ChecksPanel.vue'
-import { getLantern } from '../core/store'
+import ArchiveBanner from '../components/ArchiveBanner.vue'
+import { getLantern, persistImmediately } from '../core/store'
 import { computeAll } from '../core/checks'
 import { DEFAULT_LOFT_OPTIONS } from '../core/paginate'
 import { bodySurfaceArea } from '../core/geometry'
-import { downloadText, panelsCsv, shapeName } from '../core/exporter'
+import { downloadText, panelsCsv, recordExport, shapeName } from '../core/exporter'
 import { coveringSpec } from '../core/craft'
 
 const route = useRoute()
@@ -18,6 +19,7 @@ const full = computed(() => {
   if (!l) return null
   return computeAll(l, { ...DEFAULT_LOFT_OPTIONS, paper: l.pageSize, overlapMm: l.overlapMm })
 })
+const pageChecks = computed(() => (full.value ? full.value.checks.filter((c) => c.scopes.includes('panels')) : []))
 
 const ratio = computed(() => {
   const l = lantern.value
@@ -41,7 +43,10 @@ const palette = computed(() => {
 function exportCsv() {
   const l = lantern.value
   if (!l || !full.value) return
-  downloadText(`${l.name}-蒙面裁片清单.csv`, panelsCsv(l, full.value.panels.panels))
+  persistImmediately()
+  downloadText(`${l.name}-蒙面裁片清单.csv`, panelsCsv(l, full.value.panels.panels, full.value.checks))
+  recordExport(l, 'panels', full.value.checks)
+  persistImmediately()
 }
 </script>
 
@@ -71,8 +76,12 @@ function exportCsv() {
       <div class="stat"><span>裁片净面积</span><b>{{ (full.panels.netAreaMm2 / 1e6).toFixed(3) }} m²</b></div>
       <div class="stat"><span>含缝份裁片面积</span><b>{{ (full.panels.cutAreaMm2 / 1e6).toFixed(3) }} m²</b></div>
       <div class="stat"><span>灯体表面积</span><b>{{ full.materials.surfaceM2.toFixed(3) }} m²</b></div>
-      <div class="stat"><span>净面积 / 表面积</span><b>{{ (ratio * 100).toFixed(2) }}%</b></div>
+      <div class="stat"><span>净面积 / 表面积</span><b :class="ratio < 0.97 || ratio > 1.03 ? 'bad-num' : ''">{{ (ratio * 100).toFixed(2) }}%</b></div>
     </section>
+    <p class="ratio-note">
+      口径：裁片净面积 / 灯体表面积，比值按百分数保留 2 位小数，面积折 m² 保留 3 位小数；合格区间
+      [97.00%, 103.00%]，&lt;97.00% 或 &gt;103.00% 即未过，旋转体把母线等分数按整数逐档往上加。
+    </p>
 
     <div class="cards">
       <article v-for="p in full.panels.panels" :key="p.id" class="card">
@@ -145,9 +154,12 @@ function exportCsv() {
       </table>
     </section>
 
+    <ArchiveBanner :lantern="lantern" :checks="full.checks" />
+
     <ChecksPanel
-      :checks="full.checks.filter((c) => ['CHK-03', 'CHK-05', 'CHK-06'].includes(c.id))"
+      :checks="pageChecks"
       :elapsed-ms="full.elapsedMs"
+      scope="panels"
       title="裁片与分页自检"
     />
   </div>
@@ -223,6 +235,16 @@ button.primary:hover {
   border: 1px solid var(--line);
   border-radius: 10px;
   overflow: hidden;
+}
+
+.ratio-note {
+  margin: -6px 2px 0;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+}
+
+.bad-num {
+  color: var(--red);
 }
 
 .stat {

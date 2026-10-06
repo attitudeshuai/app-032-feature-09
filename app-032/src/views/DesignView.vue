@@ -1,15 +1,18 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import LanternPreview from '../components/LanternPreview.vue'
 import ChecksPanel from '../components/ChecksPanel.vue'
+import ArchiveBanner from '../components/ArchiveBanner.vue'
 import { getLantern, distributeLayers, syncLayerDiameters } from '../core/store'
 import { computeAll } from '../core/checks'
 import { DEFAULT_LOFT_OPTIONS } from '../core/paginate'
 import { buildGeometry, polyhedronInfo, r1 } from '../core/geometry'
 import { COVERINGS, CRAFT, coveringSpec, kindLabel } from '../core/craft'
 import { diameterFromPerimeter, diameterFromRib } from '../core/checks'
-import type { Lantern, Panel } from '../core/types'
+import { focusParam, focusSeq } from '../core/focus'
+import { PARAM_LABELS } from '../core/guide'
+import type { Lantern, Panel, ParamKey } from '../core/types'
 
 const route = useRoute()
 const lantern = computed(() => getLantern(route.params.id as string))
@@ -121,6 +124,46 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
   if (v.which === 1) l.ctrl1 = { x: v.x, y: v.y }
   else l.ctrl2 = { x: v.x, y: v.y }
 }
+
+// ---- 点未过结论 → 落到相关参数并标出 ----
+/** 参数分组锚点：同一个 ParamKey 可能落在多个区块（如层数） */
+const paramRefs = ref<Record<string, HTMLElement[]>>({})
+const hotParam = ref<ParamKey | null>(null)
+let hotTimer: number | undefined
+
+function setParamRef(el: unknown, key: ParamKey) {
+  if (el instanceof HTMLElement) {
+    const arr = (paramRefs.value[key] ||= [])
+    if (!arr.includes(el)) arr.push(el)
+  }
+}
+
+function flashParam(key: ParamKey) {
+  hotParam.value = key
+  if (hotTimer) window.clearTimeout(hotTimer)
+  hotTimer = window.setTimeout(() => {
+    if (hotParam.value === key) hotParam.value = null
+  }, 4200)
+}
+
+watch(focusSeq, async () => {
+  const key = focusParam.value
+  if (!key) return
+  await nextTick()
+  const el = paramRefs.value[key]?.[0]
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    flashParam(key)
+  }
+})
+
+function fieldClass(key: ParamKey): string {
+  return hotParam.value === key ? 'param-field hot' : 'param-field'
+}
+
+function paramLabel(key: ParamKey): string {
+  return PARAM_LABELS[key]
+}
 </script>
 
 <template>
@@ -143,8 +186,8 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
           <label>灯型</label>
           <input :value="kindLabel(lantern.kind)" type="text" readonly />
         </div>
-        <div class="field">
-          <label>{{ lantern.kind === 'revolution' ? '竖篾（母线）根数' : '棱数' }}</label>
+        <div class="field" :ref="(el) => setParamRef(el, 'sides')" :class="fieldClass('sides')">
+          <label>{{ lantern.kind === 'revolution' ? '竖篾（母线）根数' : '棱数' }}<em>（{{ paramLabel('sides') }}）</em></label>
           <input
             v-if="lantern.kind !== 'polyhedron'"
             :value="lantern.sides"
@@ -161,12 +204,12 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
       </div>
 
       <div class="row">
-        <div class="field">
-          <label>最大直径 (mm)</label>
+        <div class="field" :ref="(el) => setParamRef(el, 'maxDiameterMm')" :class="fieldClass('maxDiameterMm')">
+          <label>最大直径 (mm)<em>（{{ paramLabel('maxDiameterMm') }}）</em></label>
           <input v-model.number="lantern.maxDiameterMm" type="number" min="20" max="3000" step="1" />
         </div>
-        <div class="field">
-          <label>总高 (mm)</label>
+        <div class="field" :ref="(el) => setParamRef(el, 'totalHeightMm')" :class="fieldClass('totalHeightMm')">
+          <label>总高 (mm)<em>（{{ paramLabel('totalHeightMm') }}）</em></label>
           <input
             :value="lantern.totalHeightMm"
             type="number"
@@ -180,8 +223,8 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
       </div>
 
       <div class="row">
-        <div class="field">
-          <label>收口直径 (mm)</label>
+        <div class="field" :ref="(el) => setParamRef(el, 'mouthDiameterMm')" :class="fieldClass('mouthDiameterMm')">
+          <label>收口直径 (mm)<em>（{{ paramLabel('mouthDiameterMm') }}）</em></label>
           <input
             v-model.number="lantern.mouthDiameterMm"
             type="number"
@@ -191,8 +234,8 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
             :disabled="lantern.mouthStyle === 'flat'"
           />
         </div>
-        <div class="field">
-          <label>底口直径 (mm)</label>
+        <div class="field" :ref="(el) => setParamRef(el, 'baseDiameterMm')" :class="fieldClass('baseDiameterMm')">
+          <label>底口直径 (mm)<em>（{{ paramLabel('baseDiameterMm') }}）</em></label>
           <input
             v-model.number="lantern.baseDiameterMm"
             type="number"
@@ -207,16 +250,16 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
       <p v-if="diameterWarn" class="warn-line">⚠ {{ diameterWarn }}</p>
 
       <div class="row">
-        <div class="field">
-          <label>上收口方式</label>
+        <div class="field" :ref="(el) => setParamRef(el, 'mouthStyle')" :class="fieldClass('mouthStyle')">
+          <label>上收口方式<em>（{{ paramLabel('mouthStyle') }}）</em></label>
           <select v-model="lantern.mouthStyle">
             <option value="flat">平口</option>
             <option value="taper">收口</option>
             <option value="gourd">葫芦口（贝塞尔）</option>
           </select>
         </div>
-        <div class="field">
-          <label>下收口方式</label>
+        <div class="field" :ref="(el) => setParamRef(el, 'bottomStyle')" :class="fieldClass('bottomStyle')">
+          <label>下收口方式<em>（{{ paramLabel('bottomStyle') }}）</em></label>
           <select v-model="lantern.bottomStyle">
             <option value="flat">平口</option>
             <option value="taper">收口</option>
@@ -225,25 +268,32 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
         </div>
       </div>
 
-      <div class="field">
-        <label>收口曲线强度 <em>{{ lantern.smoothness.toFixed(2) }}</em></label>
+      <div class="field" :ref="(el) => setParamRef(el, 'smoothness')" :class="fieldClass('smoothness')">
+        <label>收口曲线强度 <em>{{ lantern.smoothness.toFixed(2) }}（{{ paramLabel('smoothness') }}）</em></label>
         <input v-model.number="lantern.smoothness" type="range" min="0" max="1" step="0.02" />
         <small>当前收口段合计占总高 {{ shoulderPct }}%（上 + 下）</small>
       </div>
 
-      <div v-if="lantern.kind === 'revolution'" class="field">
-        <label>母线等分数 <em>{{ lantern.divisions }} 等分</em></label>
+      <div
+        v-if="lantern.kind === 'revolution'"
+        class="field"
+        :ref="(el) => setParamRef(el, 'divisions')"
+        :class="fieldClass('divisions')"
+      >
+        <label>母线等分数 <em>{{ lantern.divisions }} 等分（{{ paramLabel('divisions') }}）</em></label>
         <input v-model.number="lantern.divisions" type="range" :min="CRAFT.divMin" :max="CRAFT.divMax" step="1" />
-        <small>旋转体按 {{ lantern.divisions }} 等分近似展开，等分数可调；等分越少每块越宽，面积核对偏差越大。</small>
+        <small>
+          旋转体按 {{ lantern.divisions }} 等分近似展开，等分数按整数逐档往上加；等分越少每块越宽，面积核对偏差越大。
+        </small>
       </div>
 
       <div class="row">
-        <div class="field">
-          <label>层数（分段）</label>
+        <div class="field" :ref="(el) => setParamRef(el, 'layers')" :class="fieldClass('layers')">
+          <label>层数（分段）<em>（{{ paramLabel('layers') }}）</em></label>
           <input :value="lantern.layers.length" type="number" min="1" max="12" @change="onLayerCount" />
         </div>
-        <div class="field">
-          <label>蒙面类型</label>
+        <div class="field" :ref="(el) => setParamRef(el, 'covering')" :class="fieldClass('covering')">
+          <label>蒙面类型<em>（{{ paramLabel('covering') }}）</em></label>
           <select :value="lantern.covering" @change="onCovering">
             <option v-for="c in COVERINGS" :key="c.id" :value="c.id">
               {{ c.name }}（用胶 {{ c.gluePerM2 }}g/m²）
@@ -253,16 +303,17 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
       </div>
 
       <div class="row">
-        <div class="field">
-          <label>缝份（每边 mm）</label>
+        <div class="field" :ref="(el) => setParamRef(el, 'seamAllowanceMm')" :class="fieldClass('seamAllowanceMm')">
+          <label>缝份（每边 mm）<em>（{{ paramLabel('seamAllowanceMm') }}）</em></label>
           <input v-model.number="lantern.seamAllowanceMm" type="number" min="0" max="40" step="1" />
         </div>
-        <div class="field">
-          <label>绑扎余量（每端 mm）</label>
+        <div class="field" :ref="(el) => setParamRef(el, 'lashAllowanceMm')" :class="fieldClass('lashAllowanceMm')">
+          <label>绑扎余量（每端 mm）<em>（{{ paramLabel('lashAllowanceMm') }}）</em></label>
           <input v-model.number="lantern.lashAllowanceMm" type="number" min="0" max="80" step="1" />
         </div>
       </div>
 
+      <div :ref="(el) => setParamRef(el, 'layers')" :class="fieldClass('layers')">
       <h3>分段高度与配色</h3>
       <table class="layers">
         <thead>
@@ -285,15 +336,16 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
         </tbody>
       </table>
       <small class="hint">分段高之和 = 总高 {{ lantern.totalHeightMm }}mm；直径由收口曲线自动推算。</small>
+      </div>
 
       <h3>批量制灯</h3>
       <div class="row">
-        <div class="field">
-          <label>数量（个）</label>
+        <div class="field" :ref="(el) => setParamRef(el, 'batchCount')" :class="fieldClass('batchCount')">
+          <label>数量（个）<em>（{{ paramLabel('batchCount') }}）</em></label>
           <input v-model.number="lantern.batchCount" type="number" min="1" max="500" step="1" />
         </div>
-        <div class="field">
-          <label>损耗率 <em>{{ (lantern.wasteRatio * 100).toFixed(0) }}%</em></label>
+        <div class="field" :ref="(el) => setParamRef(el, 'wasteRatio')" :class="fieldClass('wasteRatio')">
+          <label>损耗率 <em>{{ (lantern.wasteRatio * 100).toFixed(0) }}%（{{ paramLabel('wasteRatio') }}）</em></label>
           <input v-model.number="lantern.wasteRatio" type="range" min="0" max="0.2" step="0.01" />
         </div>
       </div>
@@ -327,7 +379,11 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
         <span v-if="lantern.mouthStyle === 'gourd'" class="tip">拖动绿色控制点可改葫芦口曲线</span>
       </div>
 
-      <div class="canvas">
+      <div
+        class="canvas"
+        :class="{ 'canvas-hot': hotParam === 'ctrl1' || hotParam === 'ctrl2' }"
+        :ref="(el) => { setParamRef(el, 'ctrl1'); setParamRef(el, 'ctrl2') }"
+      >
         <LanternPreview
           :lantern="lantern"
           :mode="mode"
@@ -361,6 +417,8 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
           </li>
         </ul>
       </div>
+
+      <ArchiveBanner v-if="full" :lantern="lantern" :checks="full.checks" />
 
       <ChecksPanel v-if="full" :checks="full.checks" :elapsed-ms="full.elapsedMs" title="参数自检" />
     </section>
@@ -417,6 +475,38 @@ function onCtrl(v: { which: 1 | 2; x: number; y: number }) {
   gap: 4px;
   flex: 1;
   min-width: 0;
+}
+
+/* 点未过结论后标出的参数区块（与预览页标注取同一参数叫法） */
+.param-field {
+  border-radius: 8px;
+  transition: box-shadow 0.25s, background 0.25s;
+}
+
+.field.param-field {
+  padding: 2px;
+  margin: -2px;
+}
+
+.param-field.hot {
+  background: #fff4d8;
+  box-shadow: 0 0 0 2px var(--gold), 0 0 0 6px rgba(184, 137, 31, 0.18);
+  animation: hotpulse 1.1s ease-in-out 3;
+}
+
+@keyframes hotpulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px var(--gold), 0 0 0 5px rgba(184, 137, 31, 0.15);
+  }
+  50% {
+    box-shadow: 0 0 0 3px var(--red), 0 0 0 9px rgba(179, 36, 31, 0.18);
+  }
+}
+
+.field label em {
+  font-weight: 400;
+  opacity: 0.75;
 }
 
 .row {
@@ -597,6 +687,12 @@ button:hover {
 .canvas {
   height: 440px;
   padding: 8px;
+}
+
+.canvas-hot {
+  box-shadow: 0 0 0 2px var(--gold), 0 0 0 6px rgba(184, 137, 31, 0.2);
+  border-radius: 10px;
+  animation: hotpulse 1.1s ease-in-out 3;
 }
 
 .stats {

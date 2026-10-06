@@ -1,8 +1,9 @@
 <script setup lang="ts">
 /** 灯体预览：正视 / 俯视 / 等轴测示意（不做 3D 渲染，等轴测为线框投影） */
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { Lantern } from '../core/types'
 import { buildGeometry, radiusAtY, segmentInfos, topShoulder } from '../core/geometry'
+import { focusParam, focusSeq } from '../core/focus'
 
 const props = defineProps<{
   lantern: Lantern
@@ -13,6 +14,12 @@ const emit = defineEmits<{ (e: 'update-ctrl', v: { which: 1 | 2; x: number; y: n
 
 const g = computed(() => buildGeometry(props.lantern))
 const dragging = ref<0 | 1 | 2>(0)
+
+/** 页底结论点参数时，预览图上对应尺寸标注同步高亮（与参数页同一参数叫法） */
+const hotDim = ref<string | null>(null)
+watch(focusSeq, () => {
+  hotDim.value = focusParam.value
+})
 
 const PAD = 46
 const viewBox = computed(() => {
@@ -253,7 +260,7 @@ const isoPaths = computed(() => {
       </g>
 
       <!-- 尺寸标注 -->
-      <g class="dim">
+      <g class="dim" :class="{ hot: hotDim === 'maxDiameterMm' || hotDim === 'mouthDiameterMm' || hotDim === 'baseDiameterMm' }">
         <line :x1="sx(-g.maxR)" :x2="sx(g.maxR)" :y1="FRONT_H - 16" :y2="FRONT_H - 16" />
         <line :x1="sx(-g.maxR)" :x2="sx(-g.maxR)" :y1="FRONT_H - 20" :y2="FRONT_H - 12" />
         <line :x1="sx(g.maxR)" :x2="sx(g.maxR)" :y1="FRONT_H - 20" :y2="FRONT_H - 12" />
@@ -428,6 +435,16 @@ const isoPaths = computed(() => {
 .dim text {
   font-size: 9px;
   fill: #2f5f8a;
+}
+
+.dim.hot line {
+  stroke: #b8891f;
+  stroke-width: 1.2;
+}
+
+.dim.hot text {
+  fill: #b3241f;
+  font-weight: 700;
 }
 
 .dim .dim-sub {

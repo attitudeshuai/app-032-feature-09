@@ -63,8 +63,49 @@ export interface Lantern {
   pageSize: PageSize
   /** 长条图跨页搭接量（mm） */
   overlapMm: number
+  /** 结论↔参数对应表版本（如 'G2'；与存档时不一致则存档结论/导出单子整份作废） */
+  guideVersion?: string
+  /** 最近一次本机存档时的自检结论快照（用于指出存档里留的是不是老结论） */
+  checksSnapshot?: CheckSnapshot
+  /** 旧存档迁移时按默认值补入的参数（人类可读名称列表，要列给用户看） */
+  migrationNotes?: string[]
+  /** 已导出/已打印单子的留痕（参数一变即按指纹判定是否作废） */
+  exports?: ExportRecord[]
   createdAt: string
   updatedAt: string
+}
+
+/** 导出单子种类：三份 CSV + 三种打印件 */
+export type ExportKind = 'members' | 'panels' | 'materials' | 'print-loft' | 'print-frame' | 'print-labels'
+
+/** 一次导出/打印的留痕 */
+export interface ExportRecord {
+  kind: ExportKind
+  /** 文件名或单子名称 */
+  name: string
+  at: string
+  /** 导出时的参数指纹 */
+  fingerprint: string
+  /** 导出时采用的对应表版本 */
+  guideVersion: string
+  /** 导出时各结论的通过情况（便于点明是哪一条的老结论） */
+  entries: CheckSnapshotEntry[]
+}
+
+/** 存档时留下的单条结论 */
+export interface CheckSnapshotEntry {
+  id: string
+  title: string
+  pass: boolean
+  value: string
+}
+
+/** 本机存档里留下的那一份自检结论 */
+export interface CheckSnapshot {
+  at: string
+  guideVersion: string
+  fingerprint: string
+  entries: CheckSnapshotEntry[]
 }
 
 export interface FrameMember {
@@ -137,12 +178,60 @@ export interface MaterialTally {
   ledCount?: number
 }
 
-/** 构件与裁片的自检结果（对应规格书 §10） */
-export interface CheckResult {
+/** 参数身份：结论↔参数对应关系（G2：全参排队，一个不漏）的最小单位 */
+export type ParamKey =
+  | 'maxDiameterMm'
+  | 'totalHeightMm'
+  | 'mouthDiameterMm'
+  | 'baseDiameterMm'
+  | 'sides'
+  | 'divisions'
+  | 'layers'
+  | 'mouthStyle'
+  | 'bottomStyle'
+  | 'smoothness'
+  | 'ctrl1'
+  | 'ctrl2'
+  | 'seamAllowanceMm'
+  | 'lashAllowanceMm'
+  | 'covering'
+  | 'batchCount'
+  | 'wasteRatio'
+  | 'pageSize'
+  | 'overlapMm'
+
+/** 一条参数调整建议（按影响大小排队） */
+export interface ParamHint {
+  param: ParamKey
+  /** 参数在界面上的统一叫法（参数与预览页标出时用同一个说法） */
+  label: string
+  /** 影响等级：动它把本结论转成通过的可能性 */
+  impact: 'high' | 'medium' | 'low'
+  /** 具体怎么动（方向/步长/落点），面积核对等结论给出整数目标值 */
+  advice: string
+  /** 建议落点值（整数/一位小数的目标值，给出就允许界面“一键应用”） */
+  suggestValue?: number
+  /** 动这一处会牵动（重算后可能翻转的）别的结论，一个不漏 */
+  affects: string[]
+}
+
+/** 一条结论的原始核对结果（装饰 G2 对应表之前） */
+export interface RawCheck {
   id: string
-  title: string
   pass: boolean
   detail: string
-  /** 相关数值，便于界面展示 */
   value?: string
+}
+
+/** 构件与裁片的自检结果（对应规格书 §10） */
+export interface CheckResult extends RawCheck {
+  title: string
+  /** 对应表版本：同一条结论在所有页面/导出/存档必须取同一个说法 */
+  guideVersion: string
+  /** 相关参数（按影响大小排队，一个不漏）；通过后界面不再展示调整建议 */
+  paramHints: ParamHint[]
+  /** 本结论归属的页面口径（骨架页/裁片页/放样页各自过滤显示，仍是同一条结论；空数组=只在全量页） */
+  scopes: ('frame' | 'panels' | 'print')[]
+  /** 核对所用的单位与精度口径（人类可读，导出单子一并带出） */
+  measure: string
 }

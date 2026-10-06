@@ -6,10 +6,11 @@
  * - 骨架长条跨页处绘制对位十字、拼接编号与搭接量；
  * - 附 100mm 校验尺与 Ø100 校验圆，并显式提示「请关闭『适应页面』并按 100% 打印」。
  */
-import { computed, onUnmounted, reactive, watch, watchEffect } from 'vue'
+import { computed, nextTick, onUnmounted, reactive, ref, watch, watchEffect } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ChecksPanel from '../components/ChecksPanel.vue'
-import { getLantern } from '../core/store'
+import ArchiveBanner from '../components/ArchiveBanner.vue'
+import { getLantern, persistImmediately } from '../core/store'
 import { CALIBRATION_CIRCLE_MM, CALIBRATION_RULER_MM, computeAll } from '../core/checks'
 import {
   DEFAULT_LOFT_OPTIONS,
@@ -21,9 +22,11 @@ import {
   type SheetItemStrip
 } from '../core/paginate'
 import { groupMembers } from '../core/frame'
-import { kindName, shapeName } from '../core/exporter'
+import { kindName, recordExport, shapeName } from '../core/exporter'
 import { coveringLabel, kindLabel, styleLabel } from '../core/craft'
-import type { Panel } from '../core/types'
+import { focusParam, focusSeq } from '../core/focus'
+import { PARAM_LABELS, GUIDE_VERSION } from '../core/guide'
+import type { Panel, ParamKey } from '../core/types'
 
 type PrintMode = 'loft' | 'frame' | 'labels'
 
@@ -68,6 +71,32 @@ const full = computed(() => {
 const sheets = computed(() => full.value?.sheets ?? [])
 const splitCheck = computed(() => assertNoPanelSplit(sheets.value))
 const frameGroups = computed(() => (full.value ? groupMembers(full.value.frame.members) : []))
+/** 放样图页只显示名册里归属 print 的结论（CHK-05/06/08） */
+const pageChecks = computed(() => (full.value ? full.value.checks.filter((c) => c.scopes.includes('print')) : []))
+
+// ---- 点结论跳纸张/搭接参数并标出 ----
+const paperRef = ref<HTMLElement | null>(null)
+const overlapRef = ref<HTMLElement | null>(null)
+const hotKey = ref<ParamKey | null>(null)
+let hotTimer: number | undefined
+watch(focusSeq, async () => {
+  const key = focusParam.value
+  if (!key) return
+  await nextTick()
+  const el = key === 'pageSize' ? paperRef.value : key === 'overlapMm' ? overlapRef.value : null
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    hotKey.value = key
+    if (hotTimer) window.clearTimeout(hotTimer)
+    hotTimer = window.setTimeout(() => (hotKey.value = null), 4200)
+  }
+})
+function fieldClass(key: ParamKey) {
+  return hotKey.value === key ? 'field hot' : 'field'
+}
+function paramLabel(key: ParamKey) {
+  return PARAM_LABELS[key]
+}
 
 const pageDims = computed(() => (mode.value === 'loft' ? PAPER_DIMS[opts.paper] : PAPER_DIMS.A4))
 
@@ -106,6 +135,14 @@ function setMode(m: PrintMode) {
 }
 
 function doPrint() {
+  const l = lantern.value
+  if (l && full.value) {
+    // 打印出去的图纸按当前参数留痕；参数一改，存档横幅会把它点名为老图纸
+    const kind = mode.value === 'frame' ? 'print-frame' : mode.value === 'labels' ? 'print-labels' : 'print-loft'
+    persistImmediately()
+    recordExport(l, kind, full.value.checks)
+    persistImmediately()
+  }
   window.print()
 }
 
@@ -239,15 +276,15 @@ function today(): string {
       </div>
 
       <div v-if="mode === 'loft'" class="fields">
-        <label>
-          纸张
+        <label ref="paperRef" :class="fieldClass('pageSize')">
+          <span class="fname">纸张<em>（{{ paramLabel('pageSize') }}）</em></span>
           <select v-model="opts.paper">
             <option value="A4">A4（210×297mm）</option>
             <option value="A3">A3（297×420mm）</option>
           </select>
         </label>
-        <label>
-          长条搭接量 (mm)
+        <label ref="overlapRef" :class="fieldClass('overlapMm')">
+          <span class="fname">长条搭接量 (mm)<em>（{{ paramLabel('overlapMm') }}）</em></span>
           <input v-model.number="opts.overlapMm" type="number" min="0" max="60" step="1" />
         </label>
         <label class="chk"><input v-model="opts.includeCalibration" type="checkbox" /> 校验页（100mm 校验尺）</label>
@@ -616,6 +653,32 @@ function today(): string {
         净长 {{ (full.frame.rawLengthMm / 1000).toFixed(3) }}m · 绑扎余量合计
         {{ f1(full.frame.lashExtraMm) }}mm
       </p>
+
+      <h2 class="doc-h2">自检结论（对应表 {{ GUIDE_VERSION }}，与屏幕页/CSV/本机存档同一份说法）</h2>
+      <table class="doc-table doc-checks">
+        <thead>
+          <tr>
+            <th>编号</th>
+            <th>结论</th>
+            <th>结果</th>
+            <th>取值</th>
+            <th>单位与精度</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="c in full.checks" :key="c.id">
+            <td class="mono">{{ c.id }}</td>
+            <td>{{ c.title }}</td>
+            <td :class="c.pass ? 'ok-text' : 'bad-text'">{{ c.pass ? '通过' : '未通过' }}</td>
+            <td class="mono">{{ c.value }}</td>
+            <td>{{ c.measure }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="doc-foot">
+        参数一改须重出本页；面积口径：面积折 m² 保留 3 位小数，比值按百分数保留 2 位小数，合格区间 [97.00%,
+        103.00%]；母线等分数按整数逐档增加。
+      </p>
     </section>
 
     <!-- ============ 裁片标签 ============ -->
@@ -645,11 +708,14 @@ function today(): string {
       </div>
     </section>
 
+    <ArchiveBanner v-if="full" class="no-print" :lantern="lantern" :checks="full.checks" />
+
     <ChecksPanel
       v-if="full && mode === 'loft'"
       class="no-print"
-      :checks="full.checks.filter((c) => ['CHK-05', 'CHK-06', 'CHK-08'].includes(c.id))"
+      :checks="pageChecks"
       :elapsed-ms="full.elapsedMs"
+      scope="print"
       title="放样与分页自检"
     />
   </div>
@@ -758,6 +824,36 @@ button.primary:hover {
   align-items: center;
   gap: 6px;
   color: var(--ink-soft);
+  border-radius: 7px;
+  padding: 3px 7px;
+}
+
+.fields label.hot {
+  background: #fff4d8;
+  box-shadow: 0 0 0 2px var(--gold);
+  animation: printhot 1.1s ease-in-out 3;
+}
+
+.fields label em {
+  font-style: normal;
+  opacity: 0.7;
+  font-size: 11px;
+}
+
+.fname {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+@keyframes printhot {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px var(--gold);
+  }
+  50% {
+    box-shadow: 0 0 0 3px var(--red);
+  }
 }
 
 .fields select,
@@ -1049,6 +1145,26 @@ button.primary:hover {
   margin-top: 10px;
   font-size: 11px;
   color: var(--ink-soft);
+}
+
+.doc-h2 {
+  margin: 14px 0 6px;
+  font-size: 13px;
+  color: #8f1c19;
+}
+
+.doc-checks {
+  margin-top: 4px;
+}
+
+.ok-text {
+  color: var(--jade);
+  font-weight: 600;
+}
+
+.bad-text {
+  color: var(--red);
+  font-weight: 700;
 }
 
 .num {

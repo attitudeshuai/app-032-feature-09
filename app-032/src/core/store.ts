@@ -1,13 +1,27 @@
 /**
  * 灯样存储（Vue 自带响应式 + localStorage，无 Pinia/Vuex）
  * 灯型库与工艺参数来自本地打包 src/data/lantern-types.json，断网可用。
+ *
+ * 存档一致性（对应表 G2，见 core/guide.ts）：
+ *  - 旧档载入时按写明的默认值补齐缺参，缺项列在 migrationNotes；
+ *  - 每次落盘前按当前参数指纹重算八条结论快照（checksSnapshot）；
+ *  - 参数一变指纹就变，界面/单子据此判定存档留的是不是老结论。
  */
 import { reactive, watch } from 'vue'
 import type { Lantern } from './types'
 import { CRAFT, coveringSpec, presetById, PRESETS } from './craft'
-import { buildGeometry, effectiveHeight, r1 } from './geometry'
+import { distributeLayers, syncLayerDiameters } from './layers'
+import {
+  GUIDE_VERSION,
+  migrateLantern,
+  paramFingerprint,
+  snapshotOf
+} from './guide'
+import { computeAll } from './checks'
+import { DEFAULT_LOFT_OPTIONS } from './paginate'
 
-const KEY = 'lantern-frame-lofting.v1'
+const KEY = 'lantern-frame-lofting.v2'
+const LEGACY_KEY = 'lantern-frame-lofting.v1'
 
 interface StoreState {
   lanterns: Lantern[]
@@ -65,6 +79,10 @@ export function createFromPreset(presetId: string): Lantern {
     wasteRatio: coveringSpec(p.covering).wasteRatio,
     pageSize: 'A4',
     overlapMm: CRAFT.defaultOverlapMm,
+    guideVersion: GUIDE_VERSION,
+    checksSnapshot: undefined,
+    migrationNotes: [],
+    exports: [],
     createdAt: now,
     updatedAt: now
   }
@@ -72,27 +90,7 @@ export function createFromPreset(presetId: string): Lantern {
   return lantern
 }
 
-/** 把轮廓算出的直径写回分段（数据模型 §7 中 layers[].diameterMm） */
-export function syncLayerDiameters(l: Lantern) {
-  const g = buildGeometry(l)
-  l.layers.forEach((ly, i) => {
-    const sec = g.sections[i + 1]
-    if (sec) ly.diameterMm = r1(sec.radiusMm * 2)
-  })
-  l.totalHeightMm = r1(effectiveHeight(l))
-}
-
-/** 分段高度均分（改总高/层数时调用） */
-export function distributeLayers(l: Lantern) {
-  const count = Math.max(1, Math.round(l.layers.length))
-  const each = l.totalHeightMm / count
-  l.layers = Array.from({ length: count }, () => ({ heightMm: r1v(each), diameterMm: 0 }))
-  const sum = l.layers.reduce((s, x) => s + x.heightMm, 0)
-  l.layers[count - 1].heightMm = r1v(l.layers[count - 1].heightMm + (l.totalHeightMm - sum))
-  while (l.layerColors.length < count) l.layerColors.push(l.color)
-  l.layerColors = l.layerColors.slice(0, count)
-  syncLayerDiameters(l)
-}
+export { distributeLayers, syncLayerDiameters }
 
 export function addLantern(l: Lantern) {
   state.lanterns.unshift(l)
@@ -110,6 +108,10 @@ export function duplicateLantern(id: string): Lantern | undefined {
   copy.id = makeId()
   copy.name = src.name + ' 副本'
   copy.createdAt = copy.updatedAt = new Date().toISOString()
+  // 副本的存档/导出留痕属于原灯样，不继承
+  copy.checksSnapshot = undefined
+  copy.exports = []
+  copy.migrationNotes = []
   state.lanterns.unshift(copy)
   return copy
 }
@@ -119,11 +121,24 @@ export function removeLantern(id: string) {
   if (i >= 0) state.lanterns.splice(i, 1)
 }
 
+/** 按当前参数重算八条结论快照（本机存档里留的那一份） */
+function refreshSnapshot(l: Lantern) {
+  const fp = paramFingerprint(l)
+  if (l.checksSnapshot && l.checksSnapshot.fingerprint === fp && l.checksSnapshot.guideVersion === GUIDE_VERSION) return
+  const full = computeAll(l, { ...DEFAULT_LOFT_OPTIONS, paper: l.pageSize, overlapMm: l.overlapMm })
+  l.checksSnapshot = snapshotOf(l, full.checks, new Date().toISOString())
+}
+
 function persistNow() {
   suspendPersist = true
   try {
-    for (const l of state.lanterns) syncLayerDiameters(l)
-    localStorage.setItem(KEY, JSON.stringify({ version: 1, lanterns: state.lanterns }))
+    for (const l of state.lanterns) {
+      syncLayerDiameters(l)
+      l.guideVersion = GUIDE_VERSION
+      l.updatedAt = new Date().toISOString()
+      refreshSnapshot(l)
+    }
+    localStorage.setItem(KEY, JSON.stringify({ version: 2, guideVersion: GUIDE_VERSION, lanterns: state.lanterns }))
     state.storageError = ''
   } catch (e) {
     state.storageError = e instanceof Error ? e.message : String(e)
@@ -140,14 +155,37 @@ function schedulePersist() {
   }, 180)
 }
 
+/** 立即存档（导出/打印前调用，让单子与存档取同一份结论） */
+export function persistImmediately() {
+  if (timer !== undefined) {
+    window.clearTimeout(timer)
+    timer = undefined
+  }
+  persistNow()
+}
+
 /** 载入本地灯样；首次进入预置一个六角宫灯，便于立即放样 */
 export function loadStore() {
   if (state.ready) return
   try {
-    const raw = localStorage.getItem(KEY)
+    let raw = localStorage.getItem(KEY)
+    let fromLegacy = false
+    if (!raw) {
+      raw = localStorage.getItem(LEGACY_KEY)
+      fromLegacy = !!raw
+    }
     if (raw) {
-      const data = JSON.parse(raw) as { lanterns?: Lantern[] }
-      if (Array.isArray(data.lanterns)) state.lanterns = data.lanterns
+      const data = JSON.parse(raw) as { lanterns?: Partial<Lantern>[] }
+      if (Array.isArray(data.lanterns)) {
+        state.lanterns = data.lanterns.map((x) => {
+          const { lantern, missing } = migrateLantern({ ...x, id: String(x.id || makeId()) })
+          lantern.migrationNotes = missing
+          if (fromLegacy) {
+            lantern.exports = [] // v1 档没有导出留痕，老单子一律按作废提示由用户自行重出
+          }
+          return lantern
+        })
+      }
     }
   } catch {
     state.storageError = '本地灯样数据损坏，已重置'
@@ -176,6 +214,7 @@ export function useLanternStore() {
     duplicateLantern,
     removeLantern,
     distributeLayers,
-    syncLayerDiameters
+    syncLayerDiameters,
+    persistImmediately
   }
 }

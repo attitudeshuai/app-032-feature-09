@@ -2,10 +2,11 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ChecksPanel from '../components/ChecksPanel.vue'
-import { getLantern } from '../core/store'
+import ArchiveBanner from '../components/ArchiveBanner.vue'
+import { getLantern, persistImmediately } from '../core/store'
 import { computeAll } from '../core/checks'
 import { DEFAULT_LOFT_OPTIONS } from '../core/paginate'
-import { downloadText, materialsCsv } from '../core/exporter'
+import { downloadText, materialsCsv, recordExport } from '../core/exporter'
 import { coveringSpec, CRAFT } from '../core/craft'
 import { panelCutArea } from '../core/panels'
 
@@ -42,7 +43,10 @@ const layerFabric = computed(() => {
 function exportCsv() {
   const l = lantern.value
   if (!l || !full.value) return
-  downloadText(`${l.name}-备料单.csv`, materialsCsv(l, full.value.materials, full.value.batch))
+  persistImmediately()
+  downloadText(`${l.name}-备料单.csv`, materialsCsv(l, full.value.materials, full.value.batch, full.value.checks))
+  recordExport(l, 'materials', full.value.checks)
+  persistImmediately()
 }
 </script>
 
@@ -167,7 +171,9 @@ function exportCsv() {
       </table>
     </section>
 
-    <ChecksPanel :checks="full.checks" :elapsed-ms="full.elapsedMs" title="全量验收自检（§10）" />
+    <ArchiveBanner :lantern="lantern" :checks="full.checks" />
+
+    <ChecksPanel :checks="full.checks" :elapsed-ms="full.elapsedMs" scope="materials" title="全量验收自检（§10）" />
   </div>
 </template>
 

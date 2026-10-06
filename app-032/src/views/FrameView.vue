@@ -2,11 +2,12 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ChecksPanel from '../components/ChecksPanel.vue'
-import { getLantern } from '../core/store'
+import ArchiveBanner from '../components/ArchiveBanner.vue'
+import { getLantern, persistImmediately } from '../core/store'
 import { computeAll } from '../core/checks'
 import { DEFAULT_LOFT_OPTIONS } from '../core/paginate'
 import { groupMembers } from '../core/frame'
-import { kindName, membersCsv, downloadText } from '../core/exporter'
+import { kindName, membersCsv, downloadText, recordExport } from '../core/exporter'
 import { styleLabel } from '../core/craft'
 import type { FrameMember } from '../core/types'
 
@@ -19,6 +20,8 @@ const full = computed(() => {
   return computeAll(l, { ...DEFAULT_LOFT_OPTIONS, paper: l.pageSize, overlapMm: l.overlapMm })
 })
 const groups = computed(() => (full.value ? groupMembers(full.value.frame.members) : []))
+/** 骨架页只显示名册里归属 frame 的结论（CHK-01/02/04/08），仍是同一条结论 */
+const pageChecks = computed(() => (full.value ? full.value.checks.filter((c) => c.scopes.includes('frame')) : []))
 
 function bendText(m: FrameMember): string {
   if (m.bendRadiusMm) return `R${m.bendRadiusMm.toFixed(1)}mm`
@@ -29,7 +32,11 @@ function bendText(m: FrameMember): string {
 function exportCsv() {
   const l = lantern.value
   if (!l || !full.value) return
-  downloadText(`${l.name}-构件清单.csv`, membersCsv(l, full.value.frame.members))
+  persistImmediately()
+  const csv = membersCsv(l, full.value.frame.members, full.value.checks)
+  downloadText(`${l.name}-构件清单.csv`, csv)
+  recordExport(l, 'members', full.value.checks)
+  persistImmediately()
 }
 </script>
 
@@ -92,9 +99,12 @@ function exportCsv() {
       </table>
     </section>
 
+    <ArchiveBanner :lantern="lantern" :checks="full.checks" />
+
     <ChecksPanel
-      :checks="full.checks.filter((c) => ['CHK-01', 'CHK-02', 'CHK-04', 'CHK-08'].includes(c.id))"
+      :checks="pageChecks"
       :elapsed-ms="full.elapsedMs"
+      scope="frame"
       title="骨架计算自检"
     />
   </div>
